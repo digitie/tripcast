@@ -1,0 +1,115 @@
+version: "3.9"
+
+# tripcast - 국내 여행 알림 앱
+# odroid-m1s (arm64) / WSL2 ubuntu 24.04 (amd64) 양쪽에서 동작하도록
+# multi-arch 이미지만 사용.
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: tripcast-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tripcast}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tripcast}
+      POSTGRES_DB: ${POSTGRES_DB:-tripcast}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: tripcast-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tripcast}:${POSTGRES_PASSWORD:-tripcast}@db:5432/${POSTGRES_DB:-tripcast}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: "1440"
+      DATA_GO_KR_KEY: ${DATA_GO_KR_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    command: >
+      bash -c "alembic upgrade head &&
+               uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: tripcast-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+
+  airflow-db:
+    image: postgres:16
+    container_name: tripcast-airflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  airflow:
+    build:
+      context: ./airflow
+    container_name: tripcast-airflow
+    restart: unless-stopped
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET:-airflow-secret}
+      AIRFLOW_UID: "50000"
+      TRIPCAST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tripcast}:${POSTGRES_PASSWORD:-tripcast}@db:5432/${POSTGRES_DB:-tripcast}
+      DATA_GO_KR_KEY: ${DATA_GO_KR_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./backend/app:/opt/airflow/lib/tripcast_app:ro
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username $${_AIRFLOW_WWW_USER_USERNAME} --password $${_AIRFLOW_WWW_USER_PASSWORD} --firstname admin --lastname admin --role Admin --email admin@tripcast.local || true &&
+               (airflow scheduler &) &&
+               airflow webserver"
+
+volumes:
+  db_data:
+  airflow_db_data:
+  airflow_logs:
