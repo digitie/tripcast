@@ -21,19 +21,22 @@ from tripcast_app.services.data_go_kr import DataGoKrClient
 
 
 def _active_trip_points(session):
+    """(lat, lon, radius_m) 리스트. 좌표는 소수 3자리 dedup, 반경은 max."""
     rows = session.scalars(
         select(Trip)
         .where(Trip.end_date >= datetime.now(tz=timezone.utc).date())
         .where(Trip.telegram_enabled.is_(True))
     ).all()
-    points: set[tuple[float, float]] = set()
+    points: dict[tuple[float, float], int] = {}
     for t in rows:
         for p in t.places:
             if p.location is None:
                 continue
             pt = to_shape(p.location)
-            points.add((round(pt.y, 3), round(pt.x, 3)))
-    return points
+            key = (round(pt.y, 3), round(pt.x, 3))
+            radius = p.radius_m or 10000
+            points[key] = max(points.get(key, 0), radius)
+    return [(lat, lon, r) for (lat, lon), r in points.items()]
 
 
 def update_fuel_prices() -> None:
@@ -43,14 +46,14 @@ def update_fuel_prices() -> None:
     client = DataGoKrClient(service_key=DATA_GO_KR_KEY)
     now = datetime.now(tz=timezone.utc)
     with SessionLocal() as session:
-        for lat, lon in _active_trip_points(session):
+        for lat, lon, radius_m in _active_trip_points(session):
             try:
-                resp = client.get_fuel_prices_in_radius(lat, lon, radius_m=10000)
+                resp = client.get_fuel_prices_in_radius(lat, lon, radius_m=radius_m)
                 items = _extract_items(resp)
                 for item in items:
                     _upsert_station_and_price(session, item, observed_at=now)
             except Exception as e:  # noqa: BLE001
-                print(f"fuel fetch failed for {lat},{lon}: {e}")
+                print(f"fuel fetch failed for {lat},{lon} r={radius_m}: {e}")
         session.commit()
 
 

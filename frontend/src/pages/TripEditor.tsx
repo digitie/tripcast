@@ -51,6 +51,7 @@ export default function TripEditor() {
           sido: "",
           sigungu: "",
           name: "",
+          radius_m: 10000,
         },
       ],
     }));
@@ -178,6 +179,21 @@ export default function TripEditor() {
                 <input
                   value={p.name ?? ""}
                   onChange={(e) => updatePlace(idx, { name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>반경 (km)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={Math.round((p.radius_m ?? 10000) / 1000)}
+                  onChange={(e) =>
+                    updatePlace(idx, {
+                      radius_m: Math.max(500, Number(e.target.value) * 1000),
+                    })
+                  }
                 />
               </div>
               <button type="button" onClick={() => removePlace(idx)}>

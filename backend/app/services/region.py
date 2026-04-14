@@ -93,3 +93,31 @@ SAMPLE_SIGUNGU_COORDS: dict[tuple[str, str], tuple[float, float]] = {
 
 def sigungu_to_latlon(sido: str, sigungu: str) -> tuple[float, float] | None:
     return SAMPLE_SIGUNGU_COORDS.get((sido, sigungu))
+
+
+# --- DB 기반 반경 질의 --------------------------------------------------
+
+
+def regions_within(db, lat: float, lon: float, radius_m: int) -> list:
+    """지정 좌표 반경 내에 포함되거나 교차하는 SigunguRegion 목록을 반환.
+
+    경계 폴리곤 자체와의 거리를 geography 로 계산하므로 여행지를 포함하는
+    시군구 + 반경 내로 걸쳐있는 인접 시군구가 모두 포함된다.
+    """
+    from geoalchemy2.functions import ST_DWithin
+    from sqlalchemy import cast, func, select
+    from geoalchemy2 import Geography
+
+    from ..models import SigunguRegion
+
+    pt = func.cast(
+        func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326), Geography
+    )
+    geom_geo = cast(SigunguRegion.geom, Geography)
+    rows = db.scalars(
+        select(SigunguRegion)
+        .where(SigunguRegion.geom.isnot(None))
+        .where(ST_DWithin(geom_geo, pt, radius_m))
+        .order_by(func.ST_Distance(geom_geo, pt))
+    ).all()
+    return list(rows)

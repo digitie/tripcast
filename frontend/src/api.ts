@@ -60,6 +60,8 @@ export interface TripPlace {
   longitude?: number | null;
   nx?: number | null;
   ny?: number | null;
+  /** 주변 지역/유가 검색 반경(m). 기본 10,000 */
+  radius_m?: number;
 }
 
 export interface Trip {

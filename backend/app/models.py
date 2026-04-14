@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from geoalchemy2 import Geography
+from geoalchemy2 import Geography, Geometry
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -103,6 +103,9 @@ class TripPlace(Base):
 
     # 위/경도 (EPSG:4326, geography for meter-based ST_DWithin)
     location = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=True)
+
+    # 이 장소를 중심으로 한 "주변 지역/유가" 검색 반경 (m). 기본 10km.
+    radius_m: Mapped[int] = mapped_column(Integer, default=10000, nullable=False)
 
     trip: Mapped[Trip] = relationship(back_populates="places")
 
@@ -219,6 +222,44 @@ class FuelPrice(Base):
     premium_gasoline: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # 고급유
     diesel: Mapped[Optional[float]] = mapped_column(Float, nullable=True)     # 경유
     raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+# --- 행정구역 경계 (시군구) ---------------------------------------------
+
+
+class SigunguRegion(Base):
+    """전국 시군구 행정경계.
+
+    data.go.kr / 행정안전부 '시군구 행정구역경계' SHP 파일을 3개월에 1회
+    Airflow DAG 가 갱신한다. 다각형 경계(geom) 외에 대표 중심점 (lat/lon)
+    과 기상청 격자(nx/ny) 를 함께 저장해두어 이 지역 날씨 조회가 용이하도록 한다.
+    """
+
+    __tablename__ = "sigungu_regions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # 행정구역 코드 (SIG_CD: 5자리). 없을 때는 sido|sigungu 로 합성.
+    code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
+    sido: Mapped[str] = mapped_column(String(40), nullable=False)
+    sigungu: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    # 중심점 (경계의 centroid). 반경 질의 편의를 위해 geography 포인트로도 저장.
+    center_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    center_lon: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    center = mapped_column(
+        Geography(geometry_type="POINT", srid=4326), nullable=True, index=True
+    )
+    # 기상청 동네예보 격자
+    nx: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ny: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # 실제 경계 (MultiPolygon, EPSG:4326). 큰 다각형도 다루므로 Geometry 사용.
+    geom = mapped_column(
+        Geometry(geometry_type="MULTIPOLYGON", srid=4326, spatial_index=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 # --- 알림 로그 ----------------------------------------------------------

@@ -28,9 +28,10 @@ tripcast/
 └── airflow/
     ├── Dockerfile
     └── dags/
-        ├── weather_update.py        # 30분마다 여행지 예보 갱신
+        ├── weather_update.py        # 30분마다 여행지 + 반경 내 시군구 예보 갱신
         ├── fuel_price_update.py     # 하루 3회 유가 갱신 (06/14/22)
         ├── rest_stop_update.py      # 월 1회 전국 휴게소 갱신
+        ├── region_update.py         # 3달에 1회 전국 시군구 행정경계 SHP 적재
         └── travel_notify.py         # 30분마다 알림 전송
 ```
 
@@ -65,6 +66,13 @@ docker compose up -d
 7. **알림**: 여행 시작 N일 전~여행 종료일까지 30분마다 `tripcast_travel_notify`
    DAG 가 실행되어 조건에 맞는 사용자에게 텔레그램으로 리포트를 전송하고
    `notification_logs` 에 기록한다.
+8. **시군구 경계 / 반경 알림**: data.go.kr 의 전국 시군구 행정구역경계 SHP 를
+   `tripcast_region_boundaries_quarterly` DAG 가 3개월마다 다운로드 / 갱신
+   (`REGION_SHP_URL` 로 zip 직링크 지정, 원본 좌표계는 `REGION_SHP_SRID`,
+   기본 EPSG:5179). 각 여행일의 장소마다 **반경(기본 10km, 0.5~100km 조절 가능)**
+   을 설정할 수 있고, 리포트에는 해당 반경 안에 포함되는 시군구의 날씨 요약이
+   `🗺 반경 N km 인접 지역 날씨` 섹션으로 함께 전송된다. 유가 집계 반경도
+   동일한 설정값을 사용한다.
 
 ## 주의
 `backend/app/services/data_go_kr.py` 의 엔드포인트는 data.go.kr 각 서비스의

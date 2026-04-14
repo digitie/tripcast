@@ -14,6 +14,8 @@ from airflow.operators.python import PythonOperator
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from geoalchemy2.shape import to_shape
+
 from _common import DATA_GO_KR_KEY, SessionLocal
 from tripcast_app.models import Trip, TripPlace, WeatherForecast
 from tripcast_app.services.data_go_kr import (
@@ -23,10 +25,15 @@ from tripcast_app.services.data_go_kr import (
     SKY_CODE,
     iter_forecast_items,
 )
+from tripcast_app.services.region import regions_within
 
 
 def _active_grid_places(session) -> Iterable[tuple[int, int, bool]]:
-    """(nx, ny, need_ultra)  dedup."""
+    """(nx, ny, need_ultra)  dedup.
+
+    여행지 격자뿐 아니라 각 여행지 반경(radius_m) 내 시군구 경계의
+    대표 격자도 함께 수집해, 리포트의 '인접 지역 날씨' 가 예보 캐시에서 조회 가능하게 한다.
+    """
     today = date.today()
     rows = session.scalars(
         select(Trip).where(Trip.end_date >= today).where(Trip.telegram_enabled.is_(True))
@@ -42,6 +49,19 @@ def _active_grid_places(session) -> Iterable[tuple[int, int, bool]]:
                 continue
             k = (p.nx, p.ny)
             seen[k] = seen.get(k, False) or ultra_needed
+
+            # 반경 내 시군구 대표 격자 추가
+            if p.location is None:
+                continue
+            try:
+                pt = to_shape(p.location)
+            except Exception:  # noqa: BLE001
+                continue
+            for r in regions_within(session, pt.y, pt.x, p.radius_m or 10000):
+                if r.nx is None or r.ny is None:
+                    continue
+                rk = (r.nx, r.ny)
+                seen[rk] = seen.get(rk, False) or ultra_needed
     for (nx, ny), need in seen.items():
         yield nx, ny, need
 

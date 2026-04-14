@@ -21,10 +21,12 @@ from ..models import (
     NotificationLog,
     RestStop,
     RestStopWeather,
+    SigunguRegion,
     Trip,
     TripPlace,
     WeatherForecast,
 )
+from .region import regions_within
 from .telegram import TelegramClient
 
 
@@ -131,6 +133,7 @@ class PlaceReport:
     forecast_lines: list[str]
     rest_stop_line: str | None
     fuel_line: str | None
+    nearby_region_lines: list[str]
 
 
 def _fmt_day_forecast(fcs: list[WeatherForecast]) -> list[str]:
@@ -170,6 +173,58 @@ def _fmt_hourly(fcs: list[WeatherForecast]) -> list[str]:
     return lines
 
 
+def _nearby_region_weather_lines(
+    db: Session,
+    place: TripPlace,
+    target_date: date,
+    hourly: bool,
+) -> list[str]:
+    """place 반경 내 시군구 경계들의 대표 격자 기준 날씨 요약 라인."""
+    if place.location is None:
+        return []
+    from geoalchemy2.shape import to_shape
+
+    pt = to_shape(place.location)
+    lat, lon = pt.y, pt.x
+    radius_m = place.radius_m or 10000
+    regions = regions_within(db, lat, lon, radius_m)
+    if not regions:
+        return []
+
+    place_grid = (place.nx, place.ny) if place.nx is not None else None
+    lines: list[str] = []
+    for r in regions:
+        # 여행지 자신과 같은 시군구/격자는 스킵 (중복 노이즈)
+        if r.sido == place.sido and r.sigungu == place.sigungu:
+            continue
+        if place_grid and (r.nx, r.ny) == place_grid:
+            continue
+        if r.nx is None or r.ny is None:
+            continue
+        kind = "ultra" if hourly else "short"
+        fcs = forecasts_for_day(db, r.nx, r.ny, target_date, kind)
+        if not fcs and not hourly:
+            fcs = forecasts_for_day(db, r.nx, r.ny, target_date, "mid")
+        if not fcs:
+            lines.append(f"        · {r.sido} {r.sigungu} (예보 없음)")
+            continue
+        temps = [f.temperature for f in fcs if f.temperature is not None]
+        rains = [f.precipitation or 0 for f in fcs]
+        skies = [f.sky for f in fcs if f.sky]
+        parts: list[str] = []
+        if temps:
+            parts.append(f"{min(temps):.0f}~{max(temps):.0f}℃")
+        if skies:
+            parts.append(max(set(skies), key=skies.count))
+        if any(r_ for r_ in rains):
+            parts.append(f"강수 {sum(rains):.1f}mm")
+        lines.append(f"        · {r.sido} {r.sigungu}: " + " · ".join(parts or ["정보 없음"]))
+    # 개수 제한 (너무 길면 메시지 길이 이슈)
+    if len(lines) > 8:
+        lines = lines[:8] + [f"        · ... 외 {len(lines) - 8}개"]
+    return lines
+
+
 def build_place_report(
     db: Session,
     place: TripPlace,
@@ -193,11 +248,14 @@ def build_place_report(
 
     rest_stop_line: str | None = None
     fuel_line: str | None = None
+    nearby_region_lines: list[str] = []
     if place.location is not None:
         from geoalchemy2.shape import to_shape
 
         pt = to_shape(place.location)
         lat, lon = pt.y, pt.x
+        radius_m = place.radius_m or 10000
+        radius_km = radius_m / 1000.0
 
         rs = nearest_rest_stop(db, lat, lon)
         if rs is not None:
@@ -211,16 +269,18 @@ def build_place_report(
             else:
                 rest_stop_line = f"🛣️ 인접 휴게소 '{rs.name}'"
 
-        fuel = fuel_prices_near(db, lat, lon, radius_m=10000)
+        fuel = fuel_prices_near(db, lat, lon, radius_m=radius_m)
         if fuel["station_count"] > 0:
             fuel_line = (
-                f"⛽ 반경 10km 평균 ({fuel['station_count']}개소) "
+                f"⛽ 반경 {radius_km:g}km 평균 ({fuel['station_count']}개소) "
                 f"휘발유 {fuel['gasoline']:.0f} · "
                 f"경유 {fuel['diesel']:.0f} · "
                 f"고급유 {fuel['premium_gasoline']:.0f}"
                 if all(fuel[k] is not None for k in ("gasoline", "diesel", "premium_gasoline"))
-                else f"⛽ 반경 10km 내 {fuel['station_count']}개 주유소"
+                else f"⛽ 반경 {radius_km:g}km 내 {fuel['station_count']}개 주유소"
             )
+
+        nearby_region_lines = _nearby_region_weather_lines(db, place, target_date, hourly)
 
     return PlaceReport(
         place=place,
@@ -228,6 +288,7 @@ def build_place_report(
         forecast_lines=forecast_lines,
         rest_stop_line=rest_stop_line,
         fuel_line=fuel_line,
+        nearby_region_lines=nearby_region_lines,
     )
 
 
@@ -251,6 +312,9 @@ def build_trip_message(db: Session, trip: Trip, target_date: date, hourly: bool)
             chunks.append("    " + rep.rest_stop_line)
         if rep.fuel_line:
             chunks.append("    " + rep.fuel_line)
+        if rep.nearby_region_lines:
+            chunks.append(f"    🗺 반경 {(p.radius_m or 10000) / 1000:g}km 인접 지역 날씨")
+            chunks.extend(rep.nearby_region_lines)
         chunks.append("")
     return "\n".join(chunks).rstrip()
 

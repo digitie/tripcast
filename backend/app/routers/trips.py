@@ -32,6 +32,7 @@ def _place_to_out(place: TripPlace) -> TripPlaceOut:
         ny=place.ny,
         latitude=lat,
         longitude=lon,
+        radius_m=place.radius_m,
     )
 
 
@@ -70,6 +71,7 @@ def _build_place(payload: TripPlaceIn) -> TripPlace:
         nx=nx,
         ny=ny,
         location=location,
+        radius_m=payload.radius_m,
     )
 
 

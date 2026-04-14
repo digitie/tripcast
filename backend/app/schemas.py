@@ -57,6 +57,8 @@ class TripPlaceIn(BaseModel):
     # 클라이언트에서 좌표를 제공하지 않으면 서버가 region_mapper 로 격자 변환
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # 이 장소의 주변 지역/유가 검색 반경(m). 기본 10,000m.
+    radius_m: int = Field(default=10000, ge=500, le=100000)
 
 
 class TripPlaceOut(BaseModel):
@@ -71,6 +73,7 @@ class TripPlaceOut(BaseModel):
     ny: Optional[int] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    radius_m: int = 10000
 
 
 class TripCreate(BaseModel):
