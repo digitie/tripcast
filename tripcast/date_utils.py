@@ -125,3 +125,48 @@ def get_recurring_dates(
 
     results.sort()
     return results
+
+
+def is_recurring_date(
+    weekdays: list[Weekday],
+    weeks: list[WeekOrdinal],
+    *,
+    reference: date | None = None,
+) -> bool:
+    """주어진 날짜가 월별 N번째 요일 패턴에 해당하는지 확인한다.
+
+    Args:
+        weekdays: 요일 목록. 0=월요일 … 6=일요일.
+        weeks: 주차 목록. 1–5(해당 주차) 또는 -1(마지막 주차).
+        reference: 확인할 날짜. None이면 오늘(date.today()).
+
+    Returns:
+        패턴에 해당하면 True, 아니면 False.
+
+    Raises:
+        ValueError: weekdays 값이 0–6 범위를 벗어난 경우.
+        ValueError: weeks 값이 -1, 1–5 범위를 벗어난 경우.
+
+    Examples:
+        오늘이 매월 셋째 월요일인지 확인:
+        >>> result = is_recurring_date(weekdays=[0], weeks=[3])
+
+        특정 날짜가 매월 둘째·넷째 일요일인지 확인:
+        >>> from datetime import date
+        >>> is_recurring_date(weekdays=[6], weeks=[2, 4], reference=date(2026, 4, 26))
+        True
+    """
+    for wd in weekdays:
+        if not (0 <= wd <= 6):
+            raise ValueError(f"weekdays 값은 0–6이어야 합니다. 입력값: {wd}")
+
+    target = reference or date.today()
+
+    for weekday in weekdays:
+        if target.weekday() != weekday:
+            continue
+        for week in weeks:
+            if _nth_weekday_in_month(target.year, target.month, weekday, week) == target:
+                return True
+
+    return False
